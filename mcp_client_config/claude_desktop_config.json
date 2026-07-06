@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "mcp-rag-assistant": {
+      "command": "C:\\Users\\Mr. Wu\\anaconda3\\envs\\rag\\python.exe",
+      "args": ["-m", "mcp_server.server"],
+      "cwd": "d:\\experiment\\mcp-rag-assistant"
+    }
+  }
+}
