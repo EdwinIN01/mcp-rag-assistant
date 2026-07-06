@@ -23,15 +23,23 @@ from rag_engine.vectorstore import VectorStore
 from rag_engine.retriever import HybridRetriever
 
 # ---------- 测试集：问题 + 期望来源 ----------
+# 设计原则：含专有名词（BM25占优）/ 语义表述（向量占优）/ 跨文档易混淆
 TEST_CASES = [
-    {"q": "RAG 有哪些检索优化策略？", "expect": "rag_intro.md"},
-    {"q": "什么是 RAG 检索增强生成？", "expect": "rag_intro.md"},
-    {"q": "RRF 融合是怎么工作的？", "expect": "rag_intro.md"},
-    {"q": "Embedding 缓存有什么作用？", "expect": "rag_intro.md"},
-    {"q": "什么是 MCP 协议？", "expect": "mcp_intro.md"},
-    {"q": "MCP 和 Function Calling 有什么区别？", "expect": "mcp_intro.md"},
-    {"q": "MCP 有哪些核心概念？", "expect": "mcp_intro.md"},
-    {"q": "MCP 的典型应用场景有哪些？", "expect": "mcp_intro.md"},
+    # 专有名词类（BM25 应占优）
+    {"q": "LoRA 微调的原理是什么？", "expect": "finetuning.md"},
+    {"q": "HNSW 是什么索引算法？", "expect": "vector_db.md"},
+    {"q": "PagedAttention 怎么提升推理效率？", "expect": "llm_inference.md"},
+    {"q": "ReAct 框架的 Thought Action Observation 是什么？", "expect": "agent_intro.md"},
+    {"q": "BiEncoder 和 CrossEncoder 有什么区别？", "expect": "embedding_models.md"},
+    # 语义表述类（向量应占优）
+    {"q": "怎么写好提示词让模型表现更好？", "expect": "prompt_engineering.md"},
+    {"q": "如何让大模型推理更快更省显存？", "expect": "llm_inference.md"},
+    {"q": "怎么减少大模型的幻觉问题？", "expect": "rag_intro.md"},
+    # 跨文档 / 易混淆类
+    {"q": "知识库问答和模型微调哪个更适合知识更新？", "expect": "finetuning.md"},
+    {"q": "MCP 协议解决了什么问题？", "expect": "mcp_intro.md"},
+    {"q": "少样本学习是什么？", "expect": "prompt_engineering.md"},
+    {"q": "向量数据库的近似最近邻搜索有哪些算法？", "expect": "vector_db.md"},
 ]
 
 TOP_K = 5
