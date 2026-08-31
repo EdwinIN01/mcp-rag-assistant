@@ -36,6 +36,14 @@ class VectorStore:
     ) -> List[tuple[Document, float]]:
         return self.store.similarity_search_with_score(query, k=k or config.top_k)
 
+    def similarity_search_by_vector_with_score(
+        self, embedding: List[float], k: int = None
+    ) -> List[tuple[Document, float]]:
+        """使用预计算的向量进行检索，避免重复编码。"""
+        return self.store.similarity_search_by_vector_with_relevance_scores(
+            embedding, k=k or config.top_k
+        )
+
     def get_all(self) -> Dict[str, Any]:
         return self.store.get()
 

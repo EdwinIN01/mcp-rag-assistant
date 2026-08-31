@@ -11,11 +11,21 @@ __pycache__/
 # 向量库数据（运行时生成）
 data/chroma/
 
+# 文档注册表（运行时生成）
+data/registry.db
+
+# 用户与 API Key 存储（运行时生成）
+data/auth.db
+
+# 评估报告（运行时生成）
+data/eval/
+
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
+.history/
 
 # OS
 .DS_Store
@@ -26,3 +36,7 @@ Thumbs.db
 
 # 临时文件
 *.log
+
+# 前端（Node）
+frontend/node_modules/
+frontend/dist/

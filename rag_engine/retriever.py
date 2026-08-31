@@ -1,9 +1,11 @@
 """混合检索器：向量检索 + BM25 关键词检索 + RRF 融合 + 重排 + 缓存。"""
 from typing import List
 
+import numpy as np
 from langchain_core.documents import Document
 
 from config import config
+from .embedder import Embedder
 from .vectorstore import VectorStore
 from .cache import QueryCache
 
@@ -26,6 +28,8 @@ class HybridRetriever:
         self._bm25_docs: List[Document] = []
         self._bm25_built = False
         self._reranker = None
+        # 最近一次 retrieve 的缓存命中情况：None / "exact" / "semantic"（供可观测性读取）
+        self.last_cache_hit: str | None = None
 
     # ---------- BM25 索引 ----------
     def _build_bm25(self, documents: List[Document]):
@@ -106,6 +110,14 @@ class HybridRetriever:
             print(f"[Reranker] 重排模型加载失败，将跳过重排: {e}")
             return None
 
+    def warmup_reranker(self):
+        """预热重排模型，避免首次检索重排耗时飙升。"""
+        if self._reranker is None:
+            self._reranker = self._load_reranker()
+        if self._reranker is not None:
+            # 用一对假数据触发模型首次推理，完成内部初始化
+            self._reranker.predict([["warmup", "预热"]])
+
     # ---------- 主检索入口 ----------
     def _ensure_bm25(self):
         """延迟构建 BM25 索引，避免页面冷启动时加载模型。"""
@@ -115,32 +127,45 @@ class HybridRetriever:
 
     def retrieve(self, query: str, k: int = None) -> List[Document]:
         k = k or config.rerank_top_k
+        self.last_cache_hit = None
 
-        # 1. 缓存命中
-        cached = self.cache.get(query)
+        # 1. 精确缓存命中检查（仅哈希查找，无需编码，O(1)）
+        cached = self.cache.get_exact(query)
         if cached is not None:
+            self.last_cache_hit = "exact"
             return cached
 
-        # 2. 延迟构建 BM25
+        # 2. 预编码 query 向量（仅精确未命中时才编码，供语义缓存和向量检索共用）
+        raw_vec = Embedder.embed_query(query)
+        query_vec = np.array(raw_vec, dtype=np.float32)
+        query_vec = query_vec / (np.linalg.norm(query_vec) + 1e-8)
+
+        # 3. 语义缓存命中（复用预编码向量，跳过缓存内部编码）
+        cached = self.cache.get(query, query_vec)
+        if cached is not None:
+            self.last_cache_hit = "semantic"
+            return cached
+
+        # 4. 延迟构建 BM25
         self._ensure_bm25()
 
-        # 3. 向量检索
-        vec_results = self.vectorstore.similarity_search_with_score(
-            query, k=config.top_k
+        # 5. 向量检索（复用预编码向量，跳过 Chroma 内部编码）
+        vec_results = self.vectorstore.similarity_search_by_vector_with_score(
+            raw_vec, k=config.top_k
         )
         vec_results = [(d, float(s)) for d, s in vec_results]
 
-        # 4. BM25 检索
+        # 6. BM25 检索
         bm25_results = self._bm25_search(query, k=config.top_k)
 
-        # 5. RRF 融合
+        # 7. RRF 融合
         fused = self._rrf_fuse(vec_results, bm25_results)
         fused_docs = [d for d, _ in fused]
 
-        # 6. 重排
+        # 8. 重排
         reranked = self._rerank(query, fused_docs, top_k=k)
 
-        # 7. 写缓存
+        # 9. 写缓存
         self.cache.set(query, reranked)
         return reranked
 

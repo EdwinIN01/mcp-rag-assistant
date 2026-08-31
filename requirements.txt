@@ -26,5 +26,16 @@ streamlit>=1.38.0
 # 工具
 fastapi>=0.115.0
 uvicorn>=0.30.0
+python-multipart>=0.0.9
 python-dotenv>=1.0.0
 pydantic>=2.0.0
+
+# 可观测性
+structlog>=24.0.0
+langfuse>=3.0.0
+
+# 鉴权
+PyJWT>=2.8.0
+
+# 评估（RAGAS + 质量门禁）
+ragas>=0.4.0

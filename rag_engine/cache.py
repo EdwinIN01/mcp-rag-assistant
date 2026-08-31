@@ -25,7 +25,8 @@ class QueryCache:
         self._lock = threading.Lock()
         self._faiss_index = None
 
-    def get(self, query: str) -> Optional[List]:
+    def get(self, query: str, query_vec: Optional[np.ndarray] = None) -> Optional[List]:
+        """两级缓存查找：精确优先，语义兜底。query_vec 可选预编码向量。"""
         key = self._hash(query)
         with self._lock:
             # 精确命中
@@ -34,9 +35,18 @@ class QueryCache:
                 return self._exact[key]
             # 语义近似命中
             if self._vectors:
-                hit = self._semantic_lookup(query)
+                hit = self._semantic_lookup(query, query_vec)
                 if hit is not None:
                     return hit
+        return None
+
+    def get_exact(self, query: str) -> Optional[List]:
+        """仅查精确缓存（O(1) 哈希，不编码向量），用于 retrieve 快速短路。"""
+        key = self._hash(query)
+        with self._lock:
+            if key in self._exact:
+                self._exact.move_to_end(key)
+                return self._exact[key]
         return None
 
     def set(self, query: str, value: List) -> None:
@@ -53,16 +63,22 @@ class QueryCache:
             self._keys.append(key)
             self._rebuild_index()
 
-    def _semantic_lookup(self, query: str) -> Optional[List]:
+    def _semantic_lookup(self, query: str, query_vec: Optional[np.ndarray] = None) -> Optional[List]:
         if self._faiss_index is None or len(self._vectors) == 0:
             return None
         import faiss
 
-        vec = np.array(Embedder.embed_query(query), dtype=np.float32)
-        vec = vec / (np.linalg.norm(vec) + 1e-8)
+        # 支持传入预计算向量，避免重复编码
+        if query_vec is not None:
+            vec = query_vec
+        else:
+            vec = np.array(Embedder.embed_query(query), dtype=np.float32)
+            vec = vec / (np.linalg.norm(vec) + 1e-8)
         D, I = self._faiss_index.search(vec.reshape(1, -1), 1)
         if D[0][0] >= self.similarity_threshold:
-            return self._exact.get(self._keys[I[0][0]])
+            hit_key = self._keys[I[0][0]]
+            self._exact.move_to_end(hit_key)  # 语义命中也更新 LRU，保持热度
+            return self._exact.get(hit_key)
         return None
 
     def _rebuild_index(self) -> None:
@@ -78,6 +94,14 @@ class QueryCache:
     @staticmethod
     def _hash(text: str) -> str:
         return hashlib.md5(text.encode("utf-8")).hexdigest()
+
+    def clear(self) -> None:
+        """清空缓存（向量库内容变更后调用，避免返回过期结果）。"""
+        with self._lock:
+            self._exact.clear()
+            self._vectors.clear()
+            self._keys.clear()
+            self._faiss_index = None
 
     def stats(self) -> dict:
         return {"exact_size": len(self._exact), "semantic_size": len(self._vectors)}
