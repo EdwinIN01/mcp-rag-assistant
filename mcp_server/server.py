@@ -113,6 +113,13 @@ def main():
     from rag_engine.embedder import Embedder
     Embedder.get()  # 强制加载模型到内存
     print("[MCP-RAG] embedding 模型预加载完成")
+    # 预热重排模型（避免首次检索重排耗时飙升）
+    if config.reranker_model:
+        print(f"[MCP-RAG] 预加载重排模型: {config.reranker_model} ...")
+        _retriever.warmup_reranker()
+        print("[MCP-RAG] 重排模型预加载完成")
+    else:
+        print("[MCP-RAG] 未配置重排模型，跳过预热")
     print("[MCP-RAG] BM25 索引将在首次检索时构建")
     mcp.run()
 

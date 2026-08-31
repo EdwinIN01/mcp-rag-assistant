@@ -27,6 +27,17 @@ if "history" not in st.session_state:
 retriever = st.session_state.retriever
 vectorstore = st.session_state.vectorstore
 
+# ---------- P0: 启动时预热模型（避免首次检索等 18s） ----------
+if "warmed_up" not in st.session_state:
+    with st.spinner("预热模型中（BM25 + Embedding + Reranker），首次加载约 15 秒..."):
+        retriever._ensure_bm25()
+        from rag_engine.embedder import Embedder
+        Embedder.get()
+        if config.reranker_model:
+            retriever.warmup_reranker()
+    st.session_state.warmed_up = True
+    st.session_state.doc_list_dirty = True
+
 
 def _generate_answer(messages: list) -> str:
     """调用 LLM 生成回答。无 API Key 时降级返回检索片段。"""
@@ -44,11 +55,72 @@ def _generate_answer(messages: list) -> str:
         resp = client.chat.completions.create(
             model=config.llm_model,
             messages=messages,
-            temperature=0.3,
+            temperature=0.1,
         )
         return resp.choices[0].message.content
     except Exception as e:
         return f"（LLM 调用失败: {e}）\n\n参考内容:\n{_extract_context()[:800]}"
+
+
+SYSTEM_PROMPT = (
+    "你是一个基于知识库的问答助手。严格遵守以下规则：\n"
+    "1. 只能基于用户提供的参考资料回答，不得使用资料之外的知识。\n"
+    "2. 在引用处标注 [1] [2] 等编号，确保每个论断都有出处。\n"
+    "3. 若参考资料无法回答，明确说明'根据现有资料无法回答'，不得编造。\n"
+    "4. 不得对检索内容做超出原文含义的推断或扩展。"
+)
+
+RECENT_N = 6  # 保留最近 3 轮（6 条消息）原文，更早的压缩为摘要
+
+
+def _summarize_history(old_msgs: list) -> str:
+    """用 LLM 将旧对话压缩成一段摘要。无 Key 或失败时降级为截断。"""
+    if not old_msgs:
+        return ""
+    dialogue = "\n".join(
+        f"{'用户' if m['role'] == 'user' else '助手'}: {m['content'][:200]}"
+        for m in old_msgs
+        if m["role"] in ("user", "assistant")
+    )
+    if not config.llm_api_key:
+        return dialogue[:500]
+    try:
+        from openai import OpenAI
+        client = OpenAI(base_url=config.llm_api_base, api_key=config.llm_api_key)
+        resp = client.chat.completions.create(
+            model=config.llm_model,
+            messages=[
+                {"role": "system", "content":
+                    "请将以下对话历史压缩成一段简洁的摘要，保留关键信息和上下文，不超过200字。"},
+                {"role": "user", "content": dialogue},
+            ],
+            temperature=0.0,
+        )
+        return resp.choices[0].message.content
+    except Exception:
+        return dialogue[:500]
+
+
+def _build_messages(history: list, current_user_msg: str) -> list:
+    """构建带历史记忆的 messages：超过阈值时旧对话摘要压缩，最近轮次保留原文。"""
+    # history 最后一条是刚添加的当前 user 原话，排除
+    history = [m for m in history[:-1] if m["role"] in ("user", "assistant")]
+
+    if len(history) > RECENT_N:
+        old_msgs = history[:-RECENT_N]
+        recent = history[-RECENT_N:]
+        summary = _summarize_history(old_msgs)
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": f"之前对话摘要：\n{summary}"},
+        ]
+        messages += [{"role": m["role"], "content": m["content"]} for m in recent]
+    else:
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        messages += [{"role": m["role"], "content": m["content"]} for m in history]
+
+    messages.append({"role": "user", "content": current_user_msg})
+    return messages
 
 
 st.set_page_config(page_title="MCP-RAG 智能知识库助手", page_icon="📚", layout="wide")
@@ -75,6 +147,7 @@ with st.sidebar:
             total += len(chunks)
             st.success(f"✅ {f.name}: {len(chunks)} 个片段")
         retriever.refresh_bm25()
+        st.session_state.doc_list_dirty = True
         st.info(f"本次共入库 {total} 个片段，知识库共 {vectorstore.count()} 个片段")
 
     # 一键加载示例文档（data/docs 目录）
@@ -85,17 +158,23 @@ with st.sidebar:
         chunks = splitter.split(docs)
         vectorstore.add_documents(chunks)
         retriever.refresh_bm25()
+        st.session_state.doc_list_dirty = True
         st.success(f"✅ 已加载 {len(docs)} 个示例文档，{len(chunks)} 个片段入库")
         st.info(f"知识库共 {vectorstore.count()} 个片段")
 
     st.divider()
     st.subheader("已入库文档")
-    all_data = vectorstore.get_all()
-    sources = {}
-    for meta in all_data.get("metadatas", []):
-        if meta:
-            name = meta.get("source", "未知")
-            sources[name] = sources.get(name, 0) + 1
+    # P1: 文档列表缓存在 session_state，仅在入库/删除后刷新，避免每次 rerun 查 Chroma
+    if st.session_state.get("doc_list_dirty", True):
+        all_data = vectorstore.get_all()
+        sources = {}
+        for meta in all_data.get("metadatas", []):
+            if meta:
+                name = meta.get("source", "未知")
+                sources[name] = sources.get(name, 0) + 1
+        st.session_state.doc_list_cache = sources
+        st.session_state.doc_list_dirty = False
+    sources = st.session_state.get("doc_list_cache", {})
     if sources:
         for name, cnt in sources.items():
             cols = st.columns([4, 1])
@@ -103,6 +182,7 @@ with st.sidebar:
             if cols[1].button("删除", key=f"del_{name}"):
                 vectorstore.delete_by_source(name)
                 retriever.refresh_bm25()
+                st.session_state.doc_list_dirty = True
                 st.rerun()
     else:
         st.write("（知识库为空，请上传文档）")
@@ -180,22 +260,12 @@ with tab_chat:
                     )
                     sources = [d.metadata.get("source", "未知") for d in docs]
 
-                    # 构建带历史记忆的 messages
-                    system_prompt = (
-                        "你是一个基于知识库的问答助手。请根据用户提供的参考资料回答问题，"
-                        "并在引用处标注 [1] [2] 等编号。若参考资料无法回答，可基于历史对话回复。"
-                    )
                     current_user_msg = (
                         f"用户问题：{user_input}\n\n"
                         f"参考资料（来自知识库）：\n{context}\n\n"
                         f"请根据以上参考资料回答用户问题。若参考资料无法回答，请基于历史对话说明。"
                     )
-                    messages = [{"role": "system", "content": system_prompt}]
-                    # history 最后一条是刚添加的当前 user 消息，只取之前的作为历史
-                    for msg in st.session_state.history[:-1]:
-                        if msg["role"] in ("user", "assistant"):
-                            messages.append({"role": msg["role"], "content": msg["content"]})
-                    messages.append({"role": "user", "content": current_user_msg})
+                    messages = _build_messages(st.session_state.history, current_user_msg)
 
                     answer = _generate_answer(messages)
             st.markdown(answer)
