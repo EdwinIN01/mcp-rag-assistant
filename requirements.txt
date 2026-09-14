@@ -20,9 +20,6 @@ pypdf>=5.0.0
 python-docx>=1.1.0
 docx2txt>=0.8
 
-# Web 前端
-streamlit>=1.38.0
-
 # 工具
 fastapi>=0.115.0
 uvicorn>=0.30.0

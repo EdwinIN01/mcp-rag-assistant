@@ -179,7 +179,7 @@ mcp-rag-assistant/
 ├── mcp_server/               # MCP Server 层
 │   ├── server.py             # 6 个 MCP 工具注册
 │   └── tools/external.py     # 联网搜索等外部工具
-├── web_ui/                   # Streamlit 前端（旧版，保留）
+├── mcp_client_config/        # MCP 客户端配置示例
 ├── mcp_client_config/        # MCP 客户端配置示例
 ├── .github/workflows/ci.yml  # CI：lint + RAGAS 评估门禁
 ├── docs/                     # 文档（开发问题全记录等）
@@ -225,7 +225,7 @@ mcp-rag-assistant/
 
 ## 📊 实验数据
 
-详见 `experiments_report.md` 与 `data/eval/`（RAGAS 评估报告）：
+详见 `data/eval/`（RAGAS 评估报告）：
 
 - 重排使 Top1 准确率 66.7% → 100%
 - 混合检索命中率较单路向量提升 8.3%
